@@ -6,13 +6,14 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from data_generator import (
+    DATA_VERSION,
     DEPARTMENTS,
     EDUCATION_LEVELS,
     MARITAL_STATUS,
     BUSINESS_TRAVEL,
     load_or_generate_data,
 )
-from model import FEATURE_COLUMNS, train_model, predict_employee
+from model import train_model, predict_employee
 
 st.set_page_config(
     page_title="HR Attrition Analytics",
@@ -40,12 +41,12 @@ st.markdown(
 
 
 @st.cache_data(show_spinner="Loading employee dataset...")
-def get_data() -> pd.DataFrame:
+def get_data(_version: str = DATA_VERSION) -> pd.DataFrame:
     return load_or_generate_data()
 
 
 @st.cache_resource(show_spinner="Training prediction model...")
-def get_model_artifacts():
+def get_model_artifacts(_version: str = DATA_VERSION):
     df = get_data()
     return train_model(df)
 
@@ -203,16 +204,66 @@ def tab_eda(df: pd.DataFrame) -> None:
 def tab_prediction(artifacts: dict) -> None:
     st.header("Attrition Prediction Model")
     st.markdown(
-        "A **Random Forest Classifier** is trained on 75% of the dataset "
-        "and evaluated on the held-out 25% test set."
+        "A **Random Forest Classifier** tuned via GridSearch is trained on 75% of the dataset, "
+        "with threshold optimization on a validation split, and evaluated on the held-out 25% test set."
     )
 
     metrics = artifacts["metrics"]
+    baseline = artifacts["baseline_metrics"]
+    threshold = artifacts["threshold"]
+
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Accuracy", f"{metrics['accuracy']:.1%}")
-    m2.metric("Precision", f"{metrics['precision']:.1%}")
-    m3.metric("Recall", f"{metrics['recall']:.1%}")
-    m4.metric("F1 Score", f"{metrics['f1']:.1%}")
+    m1.metric(
+        "Accuracy",
+        f"{metrics['accuracy']:.1%}",
+        delta=f"{metrics['accuracy'] - baseline['accuracy']:+.1%}",
+    )
+    m2.metric(
+        "Precision",
+        f"{metrics['precision']:.1%}",
+        delta=f"{metrics['precision'] - baseline['precision']:+.1%}",
+    )
+    m3.metric(
+        "Recall",
+        f"{metrics['recall']:.1%}",
+        delta=f"{metrics['recall'] - baseline['recall']:+.1%}",
+    )
+    m4.metric(
+        "F1 Score",
+        f"{metrics['f1']:.1%}",
+        delta=f"{metrics['f1'] - baseline['f1']:+.1%}",
+    )
+
+    st.subheader("Before vs After Comparison")
+    comparison = pd.DataFrame(
+        {
+            "Metric": ["Accuracy", "Precision", "Recall", "F1 Score"],
+            "Before": [
+                f"{baseline['accuracy']:.1%}",
+                f"{baseline['precision']:.1%}",
+                f"{baseline['recall']:.1%}",
+                f"{baseline['f1']:.1%}",
+            ],
+            "After": [
+                f"{metrics['accuracy']:.1%}",
+                f"{metrics['precision']:.1%}",
+                f"{metrics['recall']:.1%}",
+                f"{metrics['f1']:.1%}",
+            ],
+            "Change": [
+                f"{metrics['accuracy'] - baseline['accuracy']:+.1%}",
+                f"{metrics['precision'] - baseline['precision']:+.1%}",
+                f"{metrics['recall'] - baseline['recall']:+.1%}",
+                f"{metrics['f1'] - baseline['f1']:+.1%}",
+            ],
+        }
+    )
+    st.dataframe(comparison, use_container_width=True, hide_index=True)
+
+    st.caption(
+        f"**Tuned threshold:** {threshold:.2f} (was {baseline['threshold']:.2f}) · "
+        f"**Best params:** {artifacts['best_params']}"
+    )
 
     c1, c2 = st.columns(2)
 
@@ -257,6 +308,7 @@ def tab_predict_employee(artifacts: dict) -> None:
     st.markdown("Enter employee details below to get a live attrition risk prediction.")
 
     pipeline = artifacts["pipeline"]
+    threshold = artifacts["threshold"]
 
     with st.form("employee_form"):
         c1, c2, c3 = st.columns(3)
@@ -324,7 +376,7 @@ def tab_predict_employee(artifacts: dict) -> None:
             "BusinessTravel": travel,
         }
 
-        label, prob = predict_employee(pipeline, employee)
+        label, prob = predict_employee(pipeline, employee, threshold=threshold)
         risk_pct = prob * 100
 
         st.divider()
@@ -355,7 +407,7 @@ def tab_predict_employee(artifacts: dict) -> None:
                         "threshold": {
                             "line": {"color": "black", "width": 2},
                             "thickness": 0.8,
-                            "value": 50,
+                            "value": threshold * 100,
                         },
                     },
                 )
